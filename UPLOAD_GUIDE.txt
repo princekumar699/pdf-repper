@@ -1,0 +1,24 @@
+YOUR WEBSITE (replaces the same-Wi-Fi problem)
+==============================================
+Works from ANY phone on ANY network (mobile data, other Wi-Fi). Files are encrypted on the phone,
+the website only stores the encrypted data for a few minutes, your PC downloads and opens them.
+
+WHAT YOU NEED: normal web hosting with PHP (7.4 or newer) and an HTTPS certificate
+(free "SSL / Let's Encrypt" in cPanel). HTTPS is REQUIRED, otherwise phones cannot encrypt.
+
+STEP 1  Upload everything in this folder to your website folder (public_html, or a sub-folder):
+          index.php   phone.html   .htaccess   .user.ini   (nginx-example.conf only for nginx hosts)
+        Make sure hidden files (.htaccess and .user.ini) are uploaded too.
+STEP 2  Open your address in a browser, e.g. https://yourshop.com/  - you must see:
+          "QR Print Studio website is running"
+        (The folder "data" is created automatically on first use. Keep it writable.)
+STEP 3  On the shop PC: start QRPrintStudio, click "Any network (internet)", type
+          https://yourshop.com        (add the sub-folder if you used one)
+        and press Save. A QR appears. Customer scans it with any phone, picks files, taps Send.
+        The files appear on the PC, then "Aadhaar -> Editor" or "PDF -> Print".
+
+If it does not work:
+  - Opening /p/anything shows a "QR code expired" page = rewrite rules work.  If you get a 404 from the
+    host instead, ask the host to enable mod_rewrite / AllowOverride (or use nginx-example.conf).
+  - Files over a few MB fail: ask the host to allow post_max_size 40M (.user.ini does it on most hosts).
+  - The PC needs normal internet access (outgoing HTTPS to your website).

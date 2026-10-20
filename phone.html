@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Send files</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:#f3f5f9;color:#1b2233}
+.wrap{max-width:520px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:22px;margin:8px 0 4px}
+p.sub{margin:0 0 18px;color:#5b6577;font-size:15px}
+.pick{display:block;width:100%;padding:22px 12px;border:2px dashed #3b6cf6;border-radius:14px;background:#fff;color:#3b6cf6;font-size:18px;font-weight:600;text-align:center}
+.pick small{display:block;font-weight:400;color:#6b7690;font-size:13px;margin-top:6px}
+input[type=file]{display:none}
+ul{list-style:none;margin:16px 0 0;padding:0}
+li{background:#fff;border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 3px rgba(20,30,60,.08)}
+.nm{font-size:15px;word-break:break-all}
+.st{font-size:13px;color:#6b7690;margin-top:4px}
+.bar{height:6px;background:#e4e8f1;border-radius:3px;margin-top:8px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:#3b6cf6;transition:width .15s}
+li.ok .bar i{background:#1fa463}li.ok .st{color:#1fa463}
+li.err .bar i{background:#d33;width:100%}li.err .st{color:#d33}
+button.send{margin-top:16px;width:100%;padding:16px;border:0;border-radius:12px;background:#3b6cf6;color:#fff;font-size:18px;font-weight:600}
+button.send[disabled]{background:#aab6d6}
+.done{display:none;margin-top:16px;padding:14px;border-radius:12px;background:#e5f6ec;color:#16774a;font-weight:600;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Send your files</h1>
+  <p class="sub">Choose your Aadhaar, PDF or photo files. They go straight to the counter computer.</p>
+  <label class="pick" for="f">+ Choose files<small>PDF, JPG, PNG &mdash; you can select more than one</small></label>
+  <input id="f" type="file" multiple accept="application/pdf,image/*,.pdf">
+  <ul id="list"></ul>
+  <button id="send" class="send" disabled>Send</button>
+  <div id="done" class="done"></div>
+</div>
+<script>
+(function(){
+  var token = location.pathname.split('/').pop();
+  var input = document.getElementById('f'), list = document.getElementById('list');
+  var btn = document.getElementById('send'), done = document.getElementById('done');
+  var items = [], busy = false;
+
+  function fmt(n){ return n > 1048576 ? (n/1048576).toFixed(1)+' MB' : Math.max(1,Math.round(n/1024))+' KB'; }
+
+  input.onchange = function(){
+    for (var i = 0; i < input.files.length; i++) {
+      var file = input.files[i];
+      var li = document.createElement('li');
+      li.innerHTML = '<div class="nm"></div><div class="st">Ready &middot; '+fmt(file.size)+'</div><div class="bar"><i></i></div>';
+      li.firstChild.textContent = file.name;
+      list.appendChild(li);
+      items.push({file:file, li:li, sent:false});
+    }
+    input.value = '';
+    done.style.display = 'none';
+    refresh();
+  };
+
+  function refresh(){
+    var pending = 0;
+    for (var i = 0; i < items.length; i++) if (!items[i].sent) pending++;
+    btn.disabled = busy || pending === 0;
+    btn.textContent = busy ? 'Sending...' : (pending ? 'Send '+pending+' file'+(pending>1?'s':'') : 'Send');
+  }
+
+  var relayKey = location.hash.length > 10 ? location.hash.slice(1) : '';
+  var room = location.pathname.split('/').pop();
+  var MAXRELAY = 30 * 1024 * 1024;
+
+  function b64u(s){ s = s.replace(/-/g,'+').replace(/_/g,'/'); while (s.length % 4) s += '='; var b = atob(s), a = new Uint8Array(b.length); for (var i=0;i<b.length;i++) a[i]=b.charCodeAt(i); return a; }
+  function readBuf(file){
+    if (file.arrayBuffer) return file.arrayBuffer();
+    return new Promise(function(res, rej){ var fr = new FileReader(); fr.onload = function(){ res(fr.result); }; fr.onerror = rej; fr.readAsArrayBuffer(file); });
+  }
+  var keyPromise = null;
+  function getKey(){
+    if (!keyPromise) keyPromise = crypto.subtle.importKey('raw', b64u(relayKey), 'AES-GCM', false, ['encrypt']);
+    return keyPromise;
+  }
+  // payload = iv(12) | AES-GCM( nameLen(2) | name | file bytes )
+  function encryptFile(file){
+    return Promise.all([readBuf(file), getKey()]).then(function(r){
+      var nm = unescape(encodeURIComponent(file.name)), nb = new Uint8Array(nm.length);
+      for (var i=0;i<nm.length;i++) nb[i] = nm.charCodeAt(i);
+      var data = new Uint8Array(r[0]), plain = new Uint8Array(2 + nb.length + data.length);
+      plain[0] = nb.length >> 8; plain[1] = nb.length & 255; plain.set(nb, 2); plain.set(data, 2 + nb.length);
+      var iv = crypto.getRandomValues(new Uint8Array(12));
+      return crypto.subtle.encrypt({name:'AES-GCM', iv: iv}, r[1], plain).then(function(ct){
+        var out = new Uint8Array(12 + ct.byteLength); out.set(iv, 0); out.set(new Uint8Array(ct), 12); return out;
+      });
+    });
+  }
+
+  function upload(it, cb){
+    var st = it.li.children[1], bar = it.li.children[2].firstChild;
+    function fail(msg){ it.li.className = 'err'; st.textContent = msg; cb(); }
+    function send(body, url){
+      var x = new XMLHttpRequest();
+      x.open('POST', url);
+      x.upload.onprogress = function(e){
+        if (e.lengthComputable) { var p = Math.round(e.loaded*100/e.total); bar.style.width = p+'%'; st.textContent = 'Sending '+p+'%'; }
+      };
+      x.onload = function(){
+        if (x.status === 200) { it.sent = true; it.li.className = 'ok'; bar.style.width='100%'; st.textContent = 'Sent \u2713'; cb(); }
+        else fail(x.status === 403 || x.status === 404 ? 'QR expired - scan the new one' : (x.status === 413 ? 'File too big' : 'Failed - tap Send to retry'));
+      };
+      x.onerror = function(){ fail('No connection - tap Send to retry'); };
+      x.send(body);
+    }
+    if (relayKey) {
+      if (!window.crypto || !crypto.subtle) return fail('Browser too old - open in Chrome');
+      if (it.file.size > MAXRELAY) return fail('File too big (max 30 MB)');
+      st.textContent = 'Encrypting...';
+      encryptFile(it.file).then(function(buf){ send(new Blob([buf]), '/r/' + room + '/up'); }, function(){ fail('Could not read file'); });
+    } else {
+      var fd = new FormData();
+      fd.append('file', it.file, it.file.name);
+      send(fd, '/api/upload?t=' + encodeURIComponent(token));
+    }
+  }
+
+  btn.onclick = function(){
+    if (busy) return;
+    busy = true; refresh();
+    var queue = [];
+    for (var i = 0; i < items.length; i++) if (!items[i].sent) { items[i].li.className=''; queue.push(items[i]); }
+    var n = 0, total = queue.length, ok = 0;
+    (function next(){
+      if (n >= total) {
+        busy = false; refresh();
+        for (var j = 0; j < queue.length; j++) if (queue[j].sent) ok++;
+        if (ok) { done.style.display = 'block'; done.textContent = ok + ' file' + (ok>1?'s':'') + ' sent. You can close this page.'; }
+        return;
+      }
+      upload(queue[n++], next);
+    })();
+  };
+})();
+</script>
+</body>
+</html>

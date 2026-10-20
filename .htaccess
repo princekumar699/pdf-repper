@@ -1,0 +1,8 @@
+DirectoryIndex index.php
+# Apache / LiteSpeed (most shared hosting)
+RewriteEngine On
+RewriteRule ^(p|r)/ index.php [L,QSA]
+RewriteRule ^data/ - [F]
+<FilesMatch "^(phone\.html)$">
+  Require all denied
+</FilesMatch>
